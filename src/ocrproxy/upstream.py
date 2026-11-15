@@ -18,7 +18,6 @@ import httpx
 
 from .config import (
     UPSTREAM_MAX_RETRIES,
-    UPSTREAM_MAX_TOKENS,
     UPSTREAM_TIMEOUT_SECONDS,
     Settings,
 )
@@ -125,8 +124,6 @@ class UpstreamClient:
             "model": model,
             "messages": list(messages),
         }
-        body["max_tokens"] = UPSTREAM_MAX_TOKENS
-
         mode = self.mode
         if mode == "json_schema":
             body["response_format"] = {

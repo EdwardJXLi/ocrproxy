@@ -41,6 +41,10 @@ async def test_data_uri_pdf_returns_mistral_shape(pdf_bytes):
     assert first["response_format"]["type"] == "json_schema"
     assert first["response_format"]["json_schema"]["name"] == "ocr_page"
     assert first["response_format"]["json_schema"]["strict"] is True
+    # Reasoning-model defaults: sampling and token limits are left to the model.
+    assert "max_tokens" not in first
+    assert "max_completion_tokens" not in first
+    assert "temperature" not in first
     image_part = first["messages"][1]["content"][1]
     assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
 

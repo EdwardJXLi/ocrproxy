@@ -22,7 +22,6 @@ FETCH_TIMEOUT_SECONDS = 30.0
 # Upstream.
 UPSTREAM_TIMEOUT_SECONDS = 120.0
 UPSTREAM_MAX_RETRIES = 2
-UPSTREAM_MAX_TOKENS = 8192
 UPSTREAM_IMAGE_DETAIL = "high"
 
 
@@ -30,7 +29,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     upstream_base_url: str = "https://api.openai.com/v1"
-    upstream_model: str = "gpt-4.1-mini"
+    upstream_model: str = "gpt-6-luna"
     upstream_api_key: str | None = None
 
     @field_validator("upstream_base_url")
