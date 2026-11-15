@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -13,7 +12,7 @@ from fastapi import APIRouter, FastAPI, Request
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
-from .config import Settings, get_settings
+from .config import FETCH_TIMEOUT_SECONDS, MAX_DOCUMENT_BYTES, Settings, get_settings
 from .documents import UploadedBytes
 from .errors import APIError, api_error_handler
 from .pipeline import run_ocr
@@ -58,7 +57,7 @@ async def healthz() -> dict[str, str]:
 async def create_ocr(request: Request) -> OCRResponse:
     settings: Settings = request.app.state.settings
     api_key = _api_key(request, settings)
-    source, options = await _parse_request(request, settings)
+    source, options = await _parse_request(request)
     return await run_ocr(
         source=source,
         options=options,
@@ -85,20 +84,20 @@ def _api_key(request: Request, settings: Settings) -> str:
     )
 
 
-async def _parse_request(request: Request, settings: Settings) -> tuple[Any, OCROptions]:
+async def _parse_request(request: Request) -> tuple[Any, OCROptions]:
     content_type = request.headers.get("content-type", "").lower()
     if content_type.startswith("multipart/form-data"):
-        return await _parse_multipart(request, settings)
+        return await _parse_multipart(request)
 
     # Base64 inflates the payload by 4/3, plus JSON overhead.
-    limit = int(settings.max_document_bytes * 1.4) + 64 * 1024
+    limit = int(MAX_DOCUMENT_BYTES * 1.4) + 64 * 1024
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > limit:
         raise APIError(
             413,
             "document_too_large",
             f"Request body exceeds {limit // (1024 * 1024)} MiB. "
-            "Upload the document as multipart or raise OCR_MAX_DOCUMENT_MB.",
+            "Upload the document as multipart instead.",
         )
     raw = await request.body()
     if not raw:
@@ -108,7 +107,7 @@ async def _parse_request(request: Request, settings: Settings) -> tuple[Any, OCR
             413,
             "document_too_large",
             f"Request body exceeds {limit // (1024 * 1024)} MiB. "
-            "Upload the document as multipart or raise OCR_MAX_DOCUMENT_MB.",
+            "Upload the document as multipart instead.",
         )
     try:
         payload = json.loads(raw)
@@ -123,10 +122,7 @@ async def _parse_request(request: Request, settings: Settings) -> tuple[Any, OCR
     return parsed.document, _options_from(parsed)
 
 
-async def _parse_multipart(
-    request: Request,
-    settings: Settings,
-) -> tuple[UploadedBytes, OCROptions]:
+async def _parse_multipart(request: Request) -> tuple[UploadedBytes, OCROptions]:
     form = await request.form()
     upload = form.get("file")
     if not isinstance(upload, UploadFile):
@@ -135,14 +131,14 @@ async def _parse_multipart(
             "invalid_request",
             "Multipart requests must include the document in a `file` field.",
         )
-    data = await upload.read(settings.max_document_bytes + 1)
+    data = await upload.read(MAX_DOCUMENT_BYTES + 1)
     if not data:
         raise APIError(400, "invalid_request", "Uploaded file is empty.")
-    if len(data) > settings.max_document_bytes:
+    if len(data) > MAX_DOCUMENT_BYTES:
         raise APIError(
             413,
             "document_too_large",
-            f"Document exceeds the {settings.ocr_max_document_mb:g} MiB limit.",
+            f"Document exceeds the {MAX_DOCUMENT_BYTES // (1024 * 1024)} MiB limit.",
         )
 
     values: dict[str, Any] = {}
@@ -198,7 +194,7 @@ def create_app(
     cfg = settings or get_settings()
     if not logging.getLogger().handlers:
         logging.basicConfig(
-            level=os.getenv("LOG_LEVEL", "INFO").upper(),
+            level=logging.INFO,
             format="%(asctime)s %(levelname)s %(name)s %(message)s",
         )
 
@@ -207,7 +203,7 @@ def create_app(
         app.state.settings = cfg
         app.state.upstream = UpstreamClient(cfg, transport=upstream_transport)
         app.state.http = httpx.AsyncClient(
-            timeout=httpx.Timeout(cfg.ocr_fetch_timeout_seconds, connect=10.0),
+            timeout=httpx.Timeout(FETCH_TIMEOUT_SECONDS, connect=10.0),
             headers={"user-agent": "ocrproxy/0.1"},
         )
         try:

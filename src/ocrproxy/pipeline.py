@@ -13,7 +13,12 @@ from typing import Any, Sequence
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .config import Settings
+from .config import (
+    MAX_PAGES,
+    PAGE_CONCURRENCY,
+    UPSTREAM_IMAGE_DETAIL,
+    Settings,
+)
 from .documents import (
     LoadedDocument,
     RenderedPage,
@@ -172,7 +177,6 @@ def _page_messages(
     total: int,
     options: OCROptions,
     document_name: str | None,
-    settings: Settings,
 ) -> list[dict[str, Any]]:
     system = _page_system_prompt(
         table_format=options.table_format or "markdown",
@@ -190,19 +194,16 @@ def _page_messages(
                 {"type": "text", "text": f"{label} Transcribe this page."},
                 {
                     "type": "image_url",
-                    "image_url": _image_url(page.data, page.mime, settings),
+                    "image_url": _image_url(page.data, page.mime),
                 },
             ],
         },
     ]
 
 
-def _image_url(data: bytes, mime: str, settings: Settings) -> dict[str, Any]:
+def _image_url(data: bytes, mime: str) -> dict[str, Any]:
     encoded = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
-    image_url: dict[str, Any] = {"url": encoded}
-    if settings.upstream_image_detail != "auto":
-        image_url["detail"] = settings.upstream_image_detail
-    return image_url
+    return {"url": encoded, "detail": UPSTREAM_IMAGE_DETAIL}
 
 
 async def run_ocr(
@@ -226,9 +227,9 @@ async def run_ocr(
     model = (options.model or "").strip() or settings.upstream_model
 
     started = time.monotonic()
-    document: LoadedDocument = await load_document(source, http=http, settings=settings)
-    requested = parse_page_spec(options.pages, limit=settings.ocr_max_pages)
-    pages = await render_pages(document, settings=settings, requested=requested)
+    document: LoadedDocument = await load_document(source, http=http)
+    requested = parse_page_spec(options.pages, limit=MAX_PAGES)
+    pages = await render_pages(document, requested=requested)
     logger.info(
         "document %s mime=%s bytes=%d pages=%d",
         document.name or "<unnamed>",
@@ -237,7 +238,7 @@ async def run_ocr(
         len(pages),
     )
 
-    semaphore = asyncio.Semaphore(settings.ocr_page_concurrency)
+    semaphore = asyncio.Semaphore(PAGE_CONCURRENCY)
     page_objects = await asyncio.gather(
         *(
             _ocr_page(
@@ -246,7 +247,6 @@ async def run_ocr(
                 model=model,
                 options=options,
                 document_name=document.name,
-                settings=settings,
                 upstream=upstream,
                 api_key=api_key,
                 semaphore=semaphore,
@@ -261,7 +261,6 @@ async def run_ocr(
             page_objects,
             model=model,
             options=options,
-            settings=settings,
             upstream=upstream,
             api_key=api_key,
         )
@@ -290,7 +289,6 @@ async def _ocr_page(
     model: str,
     options: OCROptions,
     document_name: str | None,
-    settings: Settings,
     upstream: UpstreamClient,
     api_key: str,
     semaphore: asyncio.Semaphore,
@@ -308,12 +306,10 @@ async def _ocr_page(
                 total=total,
                 options=options,
                 document_name=document_name,
-                settings=settings,
             ),
             schema_name="ocr_page",
             schema=schema,
             strict=True,
-            max_tokens=settings.ocr_max_tokens,
         )
     extraction = _validate_extraction(payload, page.index)
 
@@ -347,8 +343,7 @@ async def _ocr_page(
 
     images: list[OCRImageObject] = []
     for index, (image, source_id, crop_bytes, crop_mime) in enumerate(pending):
-        extension = "png" if crop_mime == "image/png" else "jpeg"
-        target_id = f"img-{index}.{extension}"
+        target_id = f"img-{index}.jpeg"
         markdown = _rewrite_placeholder(markdown, source_id, target_id)
         image.id = target_id
         if options.include_image_base64:
@@ -368,7 +363,6 @@ async def _ocr_page(
                     schema_name=name,
                     schema=annotation_schema,
                     strict=strict,
-                    settings=settings,
                     upstream=upstream,
                     api_key=api_key,
                     semaphore=semaphore,
@@ -418,7 +412,6 @@ async def _annotate_crop(
     schema_name: str,
     schema: dict[str, Any],
     strict: bool,
-    settings: Settings,
     upstream: UpstreamClient,
     api_key: str,
     semaphore: asyncio.Semaphore,
@@ -433,7 +426,7 @@ async def _annotate_crop(
             "role": "user",
             "content": [
                 {"type": "text", "text": "Extract the requested fields from this image."},
-                {"type": "image_url", "image_url": _image_url(data, mime, settings)},
+                {"type": "image_url", "image_url": _image_url(data, mime)},
             ],
         },
     ]
@@ -445,7 +438,6 @@ async def _annotate_crop(
             schema_name=schema_name,
             schema=schema,
             strict=strict,
-            max_tokens=settings.ocr_max_tokens,
         )
     return json.dumps(result, ensure_ascii=False)
 
@@ -455,7 +447,6 @@ async def _annotate_document(
     *,
     model: str,
     options: OCROptions,
-    settings: Settings,
     upstream: UpstreamClient,
     api_key: str,
 ) -> str:
@@ -480,7 +471,6 @@ async def _annotate_document(
         schema_name=name,
         schema=schema,
         strict=strict,
-        max_tokens=settings.ocr_max_tokens,
     )
     return json.dumps(result, ensure_ascii=False)
 

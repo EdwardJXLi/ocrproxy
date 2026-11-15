@@ -18,30 +18,15 @@ uv sync
 
 ## Configure
 
-Configuration comes from environment variables or a `.env` file.
+Configuration comes from environment variables or a `.env` file. Only the upstream provider is configurable.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `UPSTREAM_BASE_URL` | `https://api.openai.com/v1` | Base URL of the one upstream provider; `/chat/completions` is appended |
 | `UPSTREAM_MODEL` | `gpt-4.1-mini` | Fallback model when the request omits `model`; the request's model name is forwarded unchanged |
 | `UPSTREAM_API_KEY` | unset | Fallback key when a request carries none. Leave unset to require client keys |
-| `UPSTREAM_TIMEOUT_SECONDS` | `120` | Per-request upstream timeout |
-| `UPSTREAM_MAX_RETRIES` | `2` | Retries for 429/5xx/timeouts |
-| `UPSTREAM_STRUCTURED_OUTPUT` | `json_schema` | `json_schema`, `json_object`, or `none`. Downgrades automatically if the upstream rejects a mode |
-| `UPSTREAM_MAX_TOKENS_PARAM` | `max_tokens` | Use `max_completion_tokens` for OpenAI reasoning models |
-| `UPSTREAM_IMAGE_DETAIL` | `high` | `high`, `low`, or `auto` (omit the field) |
-| `OCR_DPI` | `200` | PDF render resolution |
-| `OCR_IMAGE_FORMAT` | `jpeg` | `jpeg` or `png` page images sent upstream |
-| `OCR_IMAGE_QUALITY` | `85` | JPEG quality |
-| `OCR_MAX_IMAGE_SIDE` | `0` | Downscale page images above this pixel size; `0` disables |
-| `OCR_MAX_PAGES` | `100` | Maximum pages per document or page selection |
-| `OCR_MAX_DOCUMENT_MB` | `30` | Maximum document size |
-| `OCR_PAGE_CONCURRENCY` | `4` | Concurrent page transcriptions |
-| `OCR_MAX_TOKENS` | `8192` | Max output tokens per upstream call |
-| `OCR_TEMPERATURE` | `0` | Set to an empty value to omit the field |
-| `OCR_FETCH_TIMEOUT_SECONDS` | `30` | Timeout for fetching `document_url` over HTTP |
-| `OCR_ALLOW_PRIVATE_URLS` | `false` | Allow `document_url` hosts that resolve to private, loopback, or link-local addresses |
-| `LOG_LEVEL` | `INFO` | Python log level |
+
+Fixed limits: 30 MiB documents, 100 pages per request, 200 DPI page renders, 4 concurrent page transcriptions, 120 s upstream timeout, JPEG page images at quality 85, and 8192 output tokens per upstream call.
 
 ## Run
 
@@ -58,7 +43,7 @@ curl -s http://localhost:8000/v1/ocr \
   -d '{"model":"gpt-4.1-mini","document":{"type":"document_url","document_url":"https://example.com/report.pdf"}}'
 ```
 
-`document_url` accepts an `http(s)` URL or a `data:application/pdf;base64,...` URI. The same path also accepts `multipart/form-data` with a `file` field and optional form fields (`pages`, `include_image_base64`, `table_format`, `extract_header`, `extract_footer`, `document_annotation_prompt`, `document_annotation_format`, `bbox_annotation_format` as JSON strings).
+`document_url` accepts an `http(s)` URL or a `data:application/pdf;base64,...` URI. Remote fetches reject hosts that resolve to private, loopback, or link-local addresses. The same path also accepts `multipart/form-data` with a `file` field and optional form fields (`pages`, `include_image_base64`, `table_format`, `extract_header`, `extract_footer`, `document_annotation_prompt`, `document_annotation_format`, `bbox_annotation_format` as JSON strings).
 
 The client key is forwarded unchanged to the upstream as a bearer token. Keys are never stored or logged.
 

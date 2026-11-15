@@ -99,7 +99,6 @@ def settings(**overrides: Any) -> Settings:
         "upstream_base_url": "http://upstream.test/v1",
         "upstream_model": "test-vision",
         "upstream_api_key": None,
-        "ocr_max_pages": 10,
     }
     defaults.update(overrides)
     return Settings(_env_file=None, **defaults)

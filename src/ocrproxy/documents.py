@@ -16,7 +16,12 @@ import httpx
 import pymupdf
 from PIL import Image, UnidentifiedImageError
 
-from .config import Settings
+from .config import (
+    MAX_DOCUMENT_BYTES,
+    MAX_PAGES,
+    PAGE_DPI,
+    PAGE_IMAGE_QUALITY,
+)
 from .errors import APIError
 from .schemas import DocumentInput, DocumentURLChunk, FileChunk, ImageURLChunk
 
@@ -126,9 +131,8 @@ async def load_document(
     source: DocumentInput | UploadedBytes,
     *,
     http: httpx.AsyncClient,
-    settings: Settings,
 ) -> LoadedDocument:
-    max_bytes = settings.max_document_bytes
+    max_bytes = MAX_DOCUMENT_BYTES
 
     if isinstance(source, UploadedBytes):
         _check_size(len(source.data), max_bytes)
@@ -167,28 +171,17 @@ async def load_document(
             "`document_url` must be an http(s) URL or a data URI.",
         )
 
-    data = await _fetch(
-        url,
-        http=http,
-        max_bytes=max_bytes,
-        allow_private=settings.ocr_allow_private_urls,
-    )
+    data = await _fetch(url, http=http, max_bytes=max_bytes)
     return LoadedDocument(data=data, mime=sniff_mime(data, None), name=name)
 
 
 _MAX_REDIRECTS = 4
 
 
-async def _fetch(
-    url: str,
-    *,
-    http: httpx.AsyncClient,
-    max_bytes: int,
-    allow_private: bool,
-) -> bytes:
+async def _fetch(url: str, *, http: httpx.AsyncClient, max_bytes: int) -> bytes:
     current = url
     for _ in range(_MAX_REDIRECTS + 1):
-        await _ensure_fetchable(current, allow_private=allow_private)
+        await _ensure_fetchable(current)
         outcome = await _fetch_once(current, http=http, max_bytes=max_bytes)
         if isinstance(outcome, bytes):
             return outcome
@@ -235,7 +228,7 @@ async def _fetch_once(
         ) from exc
 
 
-async def _ensure_fetchable(url: str, *, allow_private: bool) -> None:
+async def _ensure_fetchable(url: str) -> None:
     parsed = urlsplit(url)
     if parsed.scheme not in ("http", "https"):
         raise APIError(
@@ -243,8 +236,6 @@ async def _ensure_fetchable(url: str, *, allow_private: bool) -> None:
             "document_fetch_failed",
             "Document URL must use http or https.",
         )
-    if allow_private:
-        return
     host = parsed.hostname
     if not host:
         raise APIError(400, "document_fetch_failed", "Document URL has no host.")
@@ -268,8 +259,7 @@ async def _ensure_fetchable(url: str, *, allow_private: bool) -> None:
             raise APIError(
                 400,
                 "document_url_blocked",
-                f"Refusing to fetch {host!r}: it resolves to the non-public address "
-                f"{address}. Set OCR_ALLOW_PRIVATE_URLS=true to allow local fetches.",
+                f"Refusing to fetch {host!r}: it resolves to the non-public address {address}.",
             )
 
 
@@ -337,20 +327,15 @@ def document_kind(mime: str) -> str:
 async def render_pages(
     document: LoadedDocument,
     *,
-    settings: Settings,
     requested: list[int] | None,
 ) -> list[RenderedPage]:
     kind = document_kind(document.mime)
     if kind == "pdf":
-        return await asyncio.to_thread(_render_pdf, document.data, settings, requested)
-    return _render_image(document, settings, requested)
+        return await asyncio.to_thread(_render_pdf, document.data, requested)
+    return _render_image(document, requested)
 
 
-def _render_pdf(
-    data: bytes,
-    settings: Settings,
-    requested: list[int] | None,
-) -> list[RenderedPage]:
+def _render_pdf(data: bytes, requested: list[int] | None) -> list[RenderedPage]:
     try:
         doc = pymupdf.open(stream=data, filetype="pdf")
     except pymupdf.FileDataError as exc:
@@ -366,17 +351,12 @@ def _render_pdf(
         count = doc.page_count
         if count == 0:
             raise APIError(400, "invalid_document", "PDF has no pages.")
-        indices = _select_pages(requested, count, settings)
+        indices = _select_pages(requested, count)
         pages: list[RenderedPage] = []
         for index in indices:
-            pixmap = doc.load_page(index).get_pixmap(dpi=settings.ocr_dpi, alpha=False)
+            pixmap = doc.load_page(index).get_pixmap(dpi=PAGE_DPI, alpha=False)
             image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-            payload, mime, width, height = encode_image(
-                image,
-                image_format=settings.ocr_image_format,
-                quality=settings.ocr_image_quality,
-                max_side=settings.ocr_max_image_side,
-            )
+            payload, mime, width, height = encode_image(image)
             pages.append(
                 RenderedPage(
                     index=index,
@@ -384,7 +364,7 @@ def _render_pdf(
                     mime=mime,
                     width=width,
                     height=height,
-                    dpi=max(1, round(settings.ocr_dpi * width / max(pixmap.width, 1))),
+                    dpi=max(1, round(PAGE_DPI * width / max(pixmap.width, 1))),
                 )
             )
         return pages
@@ -392,20 +372,14 @@ def _render_pdf(
 
 def _render_image(
     document: LoadedDocument,
-    settings: Settings,
     requested: list[int] | None,
 ) -> list[RenderedPage]:
-    if not _select_pages(requested, 1, settings):
+    if not _select_pages(requested, 1):
         return []
     try:
         with Image.open(io.BytesIO(document.data)) as image:
             image.load()
-            payload, mime, width, height = encode_image(
-                image,
-                image_format=settings.ocr_image_format,
-                quality=settings.ocr_image_quality,
-                max_side=settings.ocr_max_image_side,
-            )
+            payload, mime, width, height = encode_image(image)
     except (UnidentifiedImageError, OSError) as exc:
         raise APIError(400, "invalid_document", "Image could not be decoded.") from exc
     return [
@@ -415,19 +389,19 @@ def _render_image(
             mime=mime,
             width=width,
             height=height,
-            dpi=settings.ocr_dpi,
+            dpi=PAGE_DPI,
         )
     ]
 
 
-def _select_pages(requested: list[int] | None, count: int, settings: Settings) -> list[int]:
+def _select_pages(requested: list[int] | None, count: int) -> list[int]:
     if requested is None:
-        if count > settings.ocr_max_pages:
+        if count > MAX_PAGES:
             raise APIError(
                 400,
                 "invalid_request",
-                f"Document has {count} pages, limit is {settings.ocr_max_pages}. "
-                "Pass `pages` to select a range, or raise OCR_MAX_PAGES.",
+                f"Document has {count} pages, limit is {MAX_PAGES}. "
+                "Pass `pages` to select a range.",
             )
         return list(range(count))
     out_of_range = [index for index in requested if index >= count]
@@ -443,19 +417,11 @@ def _select_pages(requested: list[int] | None, count: int, settings: Settings) -
 def encode_image(
     image: Image.Image,
     *,
-    image_format: str,
-    quality: int,
-    max_side: int,
+    quality: int = PAGE_IMAGE_QUALITY,
 ) -> tuple[bytes, str, int, int]:
-    if max_side and max(image.size) > max_side:
-        image = image.copy()
-        image.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")
     buffer = io.BytesIO()
-    if image_format == "png":
-        image.save(buffer, format="PNG", optimize=True)
-        return buffer.getvalue(), "image/png", image.width, image.height
     image.save(buffer, format="JPEG", quality=quality, optimize=True)
     return buffer.getvalue(), "image/jpeg", image.width, image.height
 
@@ -486,13 +452,7 @@ def crop_page(
     try:
         with Image.open(io.BytesIO(page.data)) as image:
             cropped = image.crop((left, top, right, bottom))
-            fmt = "png" if page.mime == "image/png" else "jpeg"
-            payload, mime, _, _ = encode_image(
-                cropped,
-                image_format=fmt,
-                quality=90,
-                max_side=0,
-            )
+            payload, mime, _, _ = encode_image(cropped, quality=90)
             return payload, mime
     except (UnidentifiedImageError, OSError):
         return None

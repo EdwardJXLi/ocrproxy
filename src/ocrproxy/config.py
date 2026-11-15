@@ -1,39 +1,37 @@
-"""Process-wide configuration. One upstream provider, configured by environment."""
+"""Upstream provider configuration and fixed service limits.
+
+Only the upstream provider is configurable. Everything else is a constant, so
+the proxy stays a thin, predictable layer.
+"""
 
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Documents.
+MAX_DOCUMENT_BYTES = 30 * 1024 * 1024
+MAX_PAGES = 100
+PAGE_DPI = 200
+PAGE_IMAGE_QUALITY = 85
+PAGE_CONCURRENCY = 4
+FETCH_TIMEOUT_SECONDS = 30.0
+
+# Upstream.
+UPSTREAM_TIMEOUT_SECONDS = 120.0
+UPSTREAM_MAX_RETRIES = 2
+UPSTREAM_MAX_TOKENS = 8192
+UPSTREAM_IMAGE_DETAIL = "high"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Upstream: one OpenAI-compatible chat-completions endpoint.
     upstream_base_url: str = "https://api.openai.com/v1"
     upstream_model: str = "gpt-4.1-mini"
     upstream_api_key: str | None = None
-    upstream_timeout_seconds: float = Field(120.0, gt=0)
-    upstream_max_retries: int = Field(2, ge=0, le=8)
-    upstream_structured_output: Literal["json_schema", "json_object", "none"] = "json_schema"
-    upstream_max_tokens_param: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
-    upstream_image_detail: Literal["auto", "low", "high"] = "high"
-
-    # Service behaviour.
-    ocr_dpi: int = Field(200, ge=72, le=600)
-    ocr_image_format: Literal["jpeg", "png"] = "jpeg"
-    ocr_image_quality: int = Field(85, ge=1, le=100)
-    ocr_max_image_side: int = Field(0, ge=0)
-    ocr_max_pages: int = Field(100, ge=1)
-    ocr_max_document_mb: float = Field(30.0, gt=0)
-    ocr_page_concurrency: int = Field(4, ge=1, le=64)
-    ocr_max_tokens: int | None = Field(8192, ge=1)
-    ocr_temperature: float | None = Field(0.0, ge=0, le=2)
-    ocr_fetch_timeout_seconds: float = Field(30.0, gt=0)
-    ocr_allow_private_urls: bool = False
 
     @field_validator("upstream_base_url")
     @classmethod
@@ -42,10 +40,6 @@ class Settings(BaseSettings):
         if not url.startswith(("http://", "https://")):
             raise ValueError("UPSTREAM_BASE_URL must start with http:// or https://")
         return url
-
-    @property
-    def max_document_bytes(self) -> int:
-        return int(self.ocr_max_document_mb * 1024 * 1024)
 
 
 @lru_cache

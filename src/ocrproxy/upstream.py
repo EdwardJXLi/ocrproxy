@@ -16,7 +16,12 @@ from typing import Any
 
 import httpx
 
-from .config import Settings
+from .config import (
+    UPSTREAM_MAX_RETRIES,
+    UPSTREAM_MAX_TOKENS,
+    UPSTREAM_TIMEOUT_SECONDS,
+    Settings,
+)
 from .errors import APIError, upstream_message
 
 logger = logging.getLogger(__name__)
@@ -40,17 +45,13 @@ class UpstreamClient:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self.settings = settings
-        self.mode = settings.upstream_structured_output
+        self.mode = "json_schema"
         self._mode_lock = asyncio.Lock()
         self._client = httpx.AsyncClient(
             base_url=settings.upstream_base_url,
-            timeout=httpx.Timeout(settings.upstream_timeout_seconds, connect=10.0),
+            timeout=httpx.Timeout(UPSTREAM_TIMEOUT_SECONDS, connect=10.0),
             transport=transport,
-            limits=httpx.Limits(
-                max_connections=max(8, settings.ocr_page_concurrency * 2 + 4),
-                max_keepalive_connections=max(4, settings.ocr_page_concurrency),
-            ),
+            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
         )
 
     async def aclose(self) -> None:
@@ -65,7 +66,6 @@ class UpstreamClient:
         schema_name: str,
         schema: dict[str, Any],
         strict: bool = True,
-        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         retries = 0
         while True:
@@ -75,7 +75,6 @@ class UpstreamClient:
                 schema_name=schema_name,
                 schema=schema,
                 strict=strict,
-                max_tokens=max_tokens,
             )
             try:
                 response = await self._client.post(
@@ -85,11 +84,11 @@ class UpstreamClient:
                 )
             except httpx.TimeoutException as exc:
                 retries += 1
-                if retries > self.settings.upstream_max_retries:
+                if retries > UPSTREAM_MAX_RETRIES:
                     raise APIError(
                         504,
                         "upstream_timeout",
-                        f"Upstream did not answer within {self.settings.upstream_timeout_seconds:.0f}s.",
+                        f"Upstream did not answer within {UPSTREAM_TIMEOUT_SECONDS:.0f}s.",
                     ) from exc
                 await asyncio.sleep(_backoff(retries, None))
                 continue
@@ -105,7 +104,7 @@ class UpstreamClient:
                 if action is not None:
                     continue
                 retryable = response.status_code in (408, 409, 429) or response.status_code >= 500
-                if retryable and retries < self.settings.upstream_max_retries:
+                if retryable and retries < UPSTREAM_MAX_RETRIES:
                     retries += 1
                     await asyncio.sleep(_backoff(retries, response.headers.get("retry-after")))
                     continue
@@ -121,16 +120,12 @@ class UpstreamClient:
         schema_name: str,
         schema: dict[str, Any],
         strict: bool,
-        max_tokens: int | None,
     ) -> tuple[dict[str, Any], str]:
         body: dict[str, Any] = {
             "model": model,
             "messages": list(messages),
         }
-        if self.settings.ocr_temperature is not None:
-            body["temperature"] = self.settings.ocr_temperature
-        if max_tokens is not None:
-            body[self.settings.upstream_max_tokens_param] = max_tokens
+        body["max_tokens"] = UPSTREAM_MAX_TOKENS
 
         mode = self.mode
         if mode == "json_schema":
