@@ -55,6 +55,14 @@ The client key is forwarded unchanged to the upstream as a bearer token. Keys ar
 
 These return `400`, or `415` for an unsupported document type, with an explicit message rather than a partial response.
 
+## Container
+
+```sh
+docker build -t ocrproxy .
+```
+
+The `Container` workflow publishes `ghcr.io/<owner>/ocrproxy` with `latest`, branch, tag, and commit tags on pushes to `main` and on version tags. Pull requests build without pushing.
+
 ## Develop
 
 ```sh
