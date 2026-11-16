@@ -214,6 +214,7 @@ async def run_ocr(
     upstream: UpstreamClient,
     http: httpx.AsyncClient,
     api_key: str,
+    base_url: str | None = None,
 ) -> OCRResponse:
     _reject_unsupported(options)
     # Validate annotation requests before spending upstream calls on pages.
@@ -249,6 +250,7 @@ async def run_ocr(
                 document_name=document.name,
                 upstream=upstream,
                 api_key=api_key,
+                base_url=base_url,
                 semaphore=semaphore,
             )
             for page in pages
@@ -263,6 +265,7 @@ async def run_ocr(
             options=options,
             upstream=upstream,
             api_key=api_key,
+            base_url=base_url,
         )
 
     logger.info(
@@ -291,6 +294,7 @@ async def _ocr_page(
     document_name: str | None,
     upstream: UpstreamClient,
     api_key: str,
+    base_url: str | None,
     semaphore: asyncio.Semaphore,
 ) -> OCRPageObject:
     schema = page_extraction_schema(
@@ -310,6 +314,7 @@ async def _ocr_page(
             schema_name="ocr_page",
             schema=schema,
             strict=True,
+            base_url=base_url,
         )
     extraction = _validate_extraction(payload, page.index)
 
@@ -365,6 +370,7 @@ async def _ocr_page(
                     strict=strict,
                     upstream=upstream,
                     api_key=api_key,
+                    base_url=base_url,
                     semaphore=semaphore,
                 )
                 for _, _, crop_bytes, crop_mime in pending
@@ -414,6 +420,7 @@ async def _annotate_crop(
     strict: bool,
     upstream: UpstreamClient,
     api_key: str,
+    base_url: str | None,
     semaphore: asyncio.Semaphore,
 ) -> str:
     messages = [
@@ -438,6 +445,7 @@ async def _annotate_crop(
             schema_name=schema_name,
             schema=schema,
             strict=strict,
+            base_url=base_url,
         )
     return json.dumps(result, ensure_ascii=False)
 
@@ -449,6 +457,7 @@ async def _annotate_document(
     options: OCROptions,
     upstream: UpstreamClient,
     api_key: str,
+    base_url: str | None,
 ) -> str:
     name, schema, strict = _annotation_spec(
         options.document_annotation_format, "document_annotation_format"
@@ -471,6 +480,7 @@ async def _annotate_document(
         schema_name=name,
         schema=schema,
         strict=strict,
+        base_url=base_url,
     )
     return json.dumps(result, ensure_ascii=False)
 

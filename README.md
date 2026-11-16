@@ -18,7 +18,7 @@ uv sync
 
 ## Configure
 
-Configuration comes from environment variables or a `.env` file. Only the upstream provider is configurable.
+Configuration comes from environment variables or a `.env` file. Only the upstream provider is configurable, and each request may override its base URL.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -43,7 +43,9 @@ curl -s http://localhost:8000/v1/ocr \
   -d '{"model":"gpt-6-luna","document":{"type":"document_url","document_url":"https://example.com/report.pdf"}}'
 ```
 
-`document_url` accepts an `http(s)` URL or a `data:application/pdf;base64,...` URI. Remote fetches reject hosts that resolve to private, loopback, or link-local addresses. The same path also accepts `multipart/form-data` with a `file` field and optional form fields (`pages`, `include_image_base64`, `table_format`, `extract_header`, `extract_footer`, `document_annotation_prompt`, `document_annotation_format`, `bbox_annotation_format` as JSON strings).
+`document_url` accepts an `http(s)` URL or a `data:application/pdf;base64,...` URI. Remote fetches reject hosts that resolve to private, loopback, or link-local addresses. The same path also accepts `multipart/form-data` with a `file` field and optional form fields (`base_url`, `pages`, `include_image_base64`, `table_format`, `extract_header`, `extract_footer`, `document_annotation_prompt`, `document_annotation_format`, `bbox_annotation_format` as JSON strings).
+
+Requests may set `base_url` in the JSON body or as a multipart field to send the OCR calls to another OpenAI-compatible endpoint. The proxy appends `/chat/completions` and preserves any query string. The override requires a client-supplied key, so the configured fallback key is never sent to a request-selected host.
 
 The client key is forwarded unchanged to the upstream as a bearer token. Keys are never stored or logged.
 

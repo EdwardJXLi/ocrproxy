@@ -25,6 +25,7 @@ router = APIRouter()
 
 _FORM_OPTION_FIELDS = (
     "model",
+    "base_url",
     "pages",
     "include_image_base64",
     "image_limit",
@@ -56,8 +57,16 @@ async def healthz() -> dict[str, str]:
 )
 async def create_ocr(request: Request) -> OCRResponse:
     settings: Settings = request.app.state.settings
-    api_key = _api_key(request, settings)
+    api_key, client_key = _api_key(request, settings)
     source, options = await _parse_request(request)
+    if options.base_url is not None and not client_key:
+        raise APIError(
+            400,
+            "invalid_request",
+            "`base_url` requires a client-supplied provider key, so the configured "
+            "fallback key is never sent to a request-selected host.",
+            param="base_url",
+        )
     return await run_ocr(
         source=source,
         options=options,
@@ -65,18 +74,19 @@ async def create_ocr(request: Request) -> OCRResponse:
         upstream=request.app.state.upstream,
         http=request.app.state.http,
         api_key=api_key,
+        base_url=options.base_url,
     )
 
 
-def _api_key(request: Request, settings: Settings) -> str:
+def _api_key(request: Request, settings: Settings) -> tuple[str, bool]:
     header = request.headers.get("authorization", "")
     key = header[7:].strip() if header.lower().startswith("bearer ") else ""
     if not key:
         key = (request.headers.get("x-api-key") or "").strip()
     if key:
-        return key
+        return key, True
     if settings.upstream_api_key:
-        return settings.upstream_api_key
+        return settings.upstream_api_key, False
     raise APIError(
         401,
         "missing_api_key",

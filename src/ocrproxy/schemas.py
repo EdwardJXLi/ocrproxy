@@ -9,7 +9,9 @@ from __future__ import annotations
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from .config import normalize_base_url
 
 
 class DocumentURLChunk(BaseModel):
@@ -69,6 +71,7 @@ class OCROptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: str | None = None
+    base_url: str | None = None
     pages: str | list[int] | None = None
     include_image_base64: bool = False
     image_limit: int | None = Field(None, ge=0)
@@ -82,6 +85,11 @@ class OCROptions(BaseModel):
     # Accepted for schema compatibility, then rejected with a clear error.
     include_blocks: bool | None = None
     confidence_scores_granularity: Literal["word", "page", "block"] | None = None
+
+    @field_validator("base_url")
+    @classmethod
+    def _check_base_url(cls, value: str | None) -> str | None:
+        return None if value is None else normalize_base_url(value)
 
 
 class OCRRequest(OCROptions):

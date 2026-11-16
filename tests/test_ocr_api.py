@@ -103,6 +103,86 @@ async def test_model_falls_back_to_configuration(pdf_bytes):
     assert upstream.bodies[0]["model"] == "test-vision"
 
 
+async def test_request_base_url_override(pdf_bytes):
+    upstream = FakeUpstream()
+    async with client_for(upstream) as client:
+        response = await client.post(
+            "/v1/ocr",
+            json=ocr_body(
+                pdf_bytes,
+                base_url="http://alternate.test/api/v1/?api-version=2024-10-21",
+            ),
+            headers=AUTH,
+        )
+
+    assert response.status_code == 200, response.text
+    assert str(upstream.requests[0].url) == (
+        "http://alternate.test/api/v1/chat/completions?api-version=2024-10-21"
+    )
+
+
+async def test_multipart_base_url_override(pdf_bytes):
+    upstream = FakeUpstream()
+    async with client_for(upstream) as client:
+        response = await client.post(
+            "/v1/ocr",
+            files={"file": ("invoice.pdf", pdf_bytes, "application/pdf")},
+            data={"base_url": "http://upload.test/v2"},
+            headers=AUTH,
+        )
+
+    assert response.status_code == 200, response.text
+    assert str(upstream.requests[0].url) == "http://upload.test/v2/chat/completions"
+
+
+async def test_invalid_base_url_is_rejected(pdf_bytes):
+    async with client_for(FakeUpstream()) as client:
+        responses = [
+            await client.post(
+                "/v1/ocr", json=ocr_body(pdf_bytes, base_url=value), headers=AUTH
+            )
+            for value in (
+                "ftp://host/v1",
+                "not-a-url",
+                "http:///v1",
+                "http://user:pass@host/v1",
+                "http://host/v1 extra",
+            )
+        ]
+
+    for response in responses:
+        assert response.status_code == 400
+        assert response.json()["error"]["param"] == "base_url"
+
+
+async def test_base_url_override_requires_client_key(pdf_bytes):
+    upstream = FakeUpstream()
+    async with client_for(upstream, upstream_api_key="env-key") as client:
+        response = await client.post(
+            "/v1/ocr",
+            json=ocr_body(pdf_bytes, base_url="http://alternate.test/v1"),
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["param"] == "base_url"
+    assert upstream.requests == []
+
+
+async def test_structured_output_mode_is_tracked_per_base_url(pdf_bytes):
+    upstream = FakeUpstream(reject_json_schema=1)
+    async with client_for(upstream) as client:
+        overridden = await client.post(
+            "/v1/ocr",
+            json=ocr_body(pdf_bytes, base_url="http://alternate.test/v1"),
+            headers=AUTH,
+        )
+        default = await client.post("/v1/ocr", json=ocr_body(pdf_bytes), headers=AUTH)
+
+    assert overridden.status_code == 200, overridden.text
+    assert default.status_code == 200, default.text
+    assert upstream.bodies[-1]["response_format"]["type"] == "json_schema"
+
+
 async def test_missing_api_key(pdf_bytes):
     async with client_for(FakeUpstream()) as client:
         response = await client.post("/v1/ocr", json=ocr_body(pdf_bytes))

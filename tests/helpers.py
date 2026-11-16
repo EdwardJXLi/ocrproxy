@@ -44,7 +44,7 @@ class FakeUpstream:
         self.content_override = content
 
     def handler(self, request: httpx.Request) -> httpx.Response:
-        if request.url.path != "/v1/chat/completions":
+        if not request.url.path.endswith("/chat/completions"):
             return httpx.Response(404, json={"error": {"message": "unexpected path"}})
         payload = json.loads(request.content)
         self.requests.append(request)

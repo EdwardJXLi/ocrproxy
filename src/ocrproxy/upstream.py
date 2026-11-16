@@ -13,6 +13,7 @@ import json
 import logging
 import re
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -44,7 +45,8 @@ class UpstreamClient:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self.mode = "json_schema"
+        self.default_base_url = settings.upstream_base_url
+        self._modes: dict[str, str] = {}
         self._mode_lock = asyncio.Lock()
         self._client = httpx.AsyncClient(
             base_url=settings.upstream_base_url,
@@ -65,7 +67,9 @@ class UpstreamClient:
         schema_name: str,
         schema: dict[str, Any],
         strict: bool = True,
+        base_url: str | None = None,
     ) -> dict[str, Any]:
+        target = base_url or self.default_base_url
         retries = 0
         while True:
             body, mode_used = self._build_body(
@@ -74,10 +78,11 @@ class UpstreamClient:
                 schema_name=schema_name,
                 schema=schema,
                 strict=strict,
+                mode=self._mode(target),
             )
             try:
                 response = await self._client.post(
-                    "/chat/completions",
+                    _chat_completions_url(target),
                     json=body,
                     headers={"authorization": f"Bearer {api_key}"},
                 )
@@ -99,7 +104,7 @@ class UpstreamClient:
                 ) from exc
 
             if response.status_code >= 400:
-                action = await self._structured_failure(response, mode_used)
+                action = await self._structured_failure(response, mode_used, target)
                 if action is not None:
                     continue
                 retryable = response.status_code in (408, 409, 429) or response.status_code >= 500
@@ -119,12 +124,12 @@ class UpstreamClient:
         schema_name: str,
         schema: dict[str, Any],
         strict: bool,
+        mode: str,
     ) -> tuple[dict[str, Any], str]:
         body: dict[str, Any] = {
             "model": model,
             "messages": list(messages),
         }
-        mode = self.mode
         if mode == "json_schema":
             body["response_format"] = {
                 "type": "json_schema",
@@ -150,16 +155,21 @@ class UpstreamClient:
             )
         return body, mode
 
+    def _mode(self, base_url: str) -> str:
+        return self._modes.get(base_url, "json_schema")
+
     async def _structured_failure(
         self,
         response: httpx.Response,
         mode_used: str,
+        base_url: str,
     ) -> str | None:
         """Detect a rejected structured-output mode.
 
         Returns "retry" when another request already changed the mode, and
         "degraded" after switching to the next weaker mode. Concurrent pages
-        therefore degrade at most once each per step.
+        therefore degrade at most once each per step. Modes are tracked per
+        base URL, so one provider's limits do not weaken another's requests.
         """
         if response.status_code != 400:
             return None
@@ -167,18 +177,20 @@ class UpstreamClient:
         if not any(marker in text for marker in _STRUCTURED_OUTPUT_REJECTION):
             return None
         async with self._mode_lock:
-            if mode_used != self.mode:
+            current = self._mode(base_url)
+            if mode_used != current:
                 return "retry"
-            next_mode = {"json_schema": "json_object", "json_object": "none"}.get(self.mode)
+            next_mode = {"json_schema": "json_object", "json_object": "none"}.get(current)
             if next_mode is None:
                 return None
             logger.warning(
-                "upstream rejected %s structured output; degrading to %s: %s",
-                self.mode,
+                "upstream %s rejected %s structured output; degrading to %s: %s",
+                base_url,
+                current,
                 next_mode,
                 upstream_message(response.content),
             )
-            self.mode = next_mode
+            self._modes[base_url] = next_mode
             return "degraded"
 
     @staticmethod
@@ -196,6 +208,12 @@ class UpstreamClient:
         if response.status_code == 429:
             return APIError(429, "upstream_rate_limited", message, code="rate_limit_exceeded")
         return APIError(status, "upstream_error", message)
+
+
+def _chat_completions_url(base_url: str) -> str:
+    parsed = urlsplit(base_url)
+    path = f"{parsed.path.rstrip('/')}/chat/completions"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
 
 
 def _backoff(attempt: int, retry_after: str | None) -> float:
